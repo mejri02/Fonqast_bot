@@ -31,8 +31,8 @@ Multi-account automation bot for the [Fintoq Telegram Mini App](https://t.me/fon
 ## Installation
 
 ```bash
-git clone https://github.com/mejri02/Fintoq_telegram_bot.git
-cd Fintoq_telegram_bot
+git clone https://github.com/mejri02/Fonqast_bot.git
+cd Fonqast_bot
 npm install
 ```
 
@@ -123,6 +123,6 @@ This tool interacts with Fintoq's Telegram Mini App API in an automated fashion.
 
 ## Links
 
-- **GitHub:** [mejri02/Fintoq_telegram_bot](https://github.com/mejri02/Fintoq_telegram_bot)
+- **GitHub:** [mejri02/Fonqast_bot](https://github.com/mejri02/Fonqast_bot)
 - **Referral:** [https://t.me/fonqastbot?startapp=ref_5028815150](https://t.me/fonqastbot?startapp=ref_5028815150)
 - **Telegram:** [@AirDropXDevs](https://t.me/AirDropXDevs)
