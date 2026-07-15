@@ -10,14 +10,25 @@ const CONFIG = {
     API_BASE: 'https://app.fintoq.ai/api',
     BOT_USERNAME: 'fonqastbot',
     DEFAULT_REFERRAL: 'ref_5028815150',
-    MAX_RETRIES: 1,
+    MAX_RETRIES: 3,
     RETRY_DELAY: 1000,
-    MIN_ACCOUNT_DELAY: 30000,
-    MAX_ACCOUNT_DELAY: 120000,
-    MIN_ACTION_DELAY: 2000,
-    MAX_ACTION_DELAY: 5000,
-    NOVA_MESSAGES_TO_SEND: 5,
-    REQUEST_TIMEOUT: 8000,
+    RETRY_BACKOFF: 2,
+    MIN_ACCOUNT_DELAY: 8000,
+    MAX_ACCOUNT_DELAY: 15000,
+    MIN_ACTION_DELAY: 400,
+    MAX_ACTION_DELAY: 800,
+    MIN_MESSAGE_DELAY: 200,
+    MAX_MESSAGE_DELAY: 500,
+    NOVA_MESSAGES_TO_SEND: 15,
+    REQUEST_TIMEOUT: 12000,
+    MAX_PREDICTION_STAKE: 50,
+    MIN_PREDICTION_STAKE: 5,
+    DAILY_BONUS_PRIORITY: true,
+    CLAIM_ALL_REWARDS: true,
+    AGGRESSIVE_MODE: true,
+    BOOST_BEFORE_MESSAGES: true,
+    PARALLEL_QUESTS: false,
+    SMART_PREDICTION: true,
 };
 
 const USER_AGENTS = [
@@ -29,7 +40,6 @@ const USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) Version/17.1 Mobile/15E148 Safari/604.1',
     'Mozilla/5.0 (iPad; CPU OS 17_1_1 like Mac OS X) Version/17.1 Mobile/15E148 Safari/604.1',
-    'Mozilla/5.0 (Android 13; Mobile; rv:109.0) Gecko/121.0 Firefox/121.0',
 ];
 
 const CHAT_MESSAGES = [
@@ -53,11 +63,6 @@ const CHAT_MESSAGES = [
     "Explain how liquidity pools work",
     "What is impermanent loss?",
     "How do I evaluate a new token's tokenomics?",
-    "What's the role of a blockchain oracle?",
-    "Explain rollups and why they help scaling",
-    "What should I look for before joining an airdrop?",
-    "How do multisig wallets improve security?",
-    "What's the difference between a hot and cold wallet?",
 ];
 
 const BOOST_SKIP_REASONS = {
@@ -68,18 +73,19 @@ const BOOST_SKIP_REASONS = {
 };
 
 const BANNER = `
-╔═══════════════════════════════════════════════════════╗
-║                                                       ║
-║  ███████╗██╗███╗   ██╗████████╗ ██████╗  ██████╗    ║
-║  ██╔════╝██║████╗  ██║╚══██╔══╝██╔═══██╗██╔═══██╗   ║
-║  █████╗  ██║██╔██╗ ██║   ██║   ██║   ██║██║   ██║   ║
-║  ██╔══╝  ██║██║╚██╗██║   ██║   ██║   ██║██║   ██║   ║
-║  ██║     ██║██║ ╚████║   ██║   ╚██████╔╝╚██████╔╝   ║
-║  ╚═╝     ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝  ╚═════╝    ║
-║                                                       ║
-║         🚀 Automated FINTOQ Bot v2.1                  ║
-║                                                       ║
-╚═══════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════════╗
+║                                                               ║
+║  ███████╗██╗███╗   ██╗████████╗ ██████╗  ██████╗             ║
+║  ██╔════╝██║████╗  ██║╚══██╔══╝██╔═══██╗██╔═══██╗            ║
+║  █████╗  ██║██╔██╗ ██║   ██║   ██║   ██║██║   ██║            ║
+║  ██╔══╝  ██║██║╚██╗██║   ██║   ██║   ██║██║   ██║            ║
+║  ██║     ██║██║ ╚████║   ██║   ╚██████╔╝╚██████╔╝            ║
+║  ╚═╝     ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝  ╚═════╝             ║
+║                                                               ║
+║  🚀 FINTOQ Professional Bot v3.2 - OPTIMIZED for MAX FXP      ║
+║  🔥 Aggressive Mode | Fast Message Flooding | Smart Stakes    ║
+║                                                               ║
+╚═══════════════════════════════════════════════════════════════╝
 `;
 
 class Logger {
@@ -119,6 +125,7 @@ class Logger {
     account(msg, user) { this.log('ACCOUNT', chalk.blue(`👤 [${user}] ${msg}`)); }
     reward(msg) { this.log('REWARD', chalk.yellow(`💰 ${msg}`)); }
     skip(msg, user) { this.log('SKIP', chalk.gray(`⏭️ [${user}] ${msg}`)); }
+    task(msg, user) { this.log('TASK', chalk.magenta(`⚙️ [${user}] ${msg}`)); }
     banner() { console.log(chalk.cyan(BANNER)); }
 }
 
@@ -175,7 +182,9 @@ class ProxyManager {
                     .map(line => line.trim())
                     .filter(line => line.length > 0 && !line.startsWith('#'));
             }
-        } catch (e) {}
+        } catch (e) {
+            logger.warn(`Proxy load error: ${e.message}`);
+        }
     }
 
     getRandomProxy() {
@@ -191,6 +200,7 @@ class ProxyManager {
             }
             return new HttpsProxyAgent(proxyUrl);
         } catch (e) {
+            logger.warn(`Proxy agent error: ${e.message}`);
             return null;
         }
     }
@@ -241,10 +251,12 @@ class AccountManager {
                         lastAction: null,
                         dailyChatCount: 0,
                         dailyChatLimit: 10,
+                        totalRewardsEarned: 0,
+                        tasksCompleted: 0,
                     });
                 }
             }
-            logger.info(`Loaded ${this.accounts.length} accounts`);
+            logger.info(`✅ Loaded ${this.accounts.length} accounts`);
         } catch (e) {
             logger.error(`Failed to load accounts: ${e.message}`);
         }
@@ -274,6 +286,7 @@ class AccountManager {
             account.token = null;
             account.stats = {};
             account.dailyChatCount = 0;
+            account.tasksCompleted = 0;
         }
         this.currentIndex = 0;
     }
@@ -284,6 +297,10 @@ class AccountManager {
 
     getTotalCount() {
         return this.accounts.length;
+    }
+
+    getTotalRewards() {
+        return this.accounts.reduce((sum, a) => sum + a.totalRewardsEarned, 0);
     }
 }
 
@@ -325,7 +342,7 @@ class FINTOQClient {
         return { proxy, agent };
     }
 
-    async request(method, endpoint, data = null) {
+    async request(method, endpoint, data = null, retryCount = 0) {
         const url = `${this.baseURL}${endpoint}`;
         const headers = this.getHeaders();
         const proxyConfig = this.getProxyConfig();
@@ -345,25 +362,46 @@ class FINTOQClient {
             const response = await axios(config);
 
             if (response.status === 429) {
+                if (endpoint === '/nova/message') {
+                    logger.warn(`⛔ Chat limit enforced by API`);
+                    return {
+                        success: false,
+                        error: 'Chat limit reached',
+                        code: 'NOVA_LIMIT_REACHED',
+                        status: 429,
+                    };
+                }
+
+                if (retryCount < CONFIG.MAX_RETRIES) {
+                    const delay = CONFIG.RETRY_DELAY * Math.pow(CONFIG.RETRY_BACKOFF, retryCount);
+                    logger.warn(`Rate limited on ${endpoint}, retrying in ${delay}ms...`);
+                    await sleep(delay);
+                    return this.request(method, endpoint, data, retryCount + 1);
+                }
                 return {
                     success: false,
-                    error: response.data?.error || 'Rate limited',
-                    code: response.data?.code,
+                    error: 'Rate limited (max retries)',
+                    code: 'RATE_LIMIT',
                     status: 429,
                 };
             }
 
             if (response.status === 401) {
                 if (await this.authenticate()) {
-                    headers['Authorization'] = `Bearer ${this.account.token}`;
-                    config.headers = headers;
-                    return this.request(method, endpoint, data);
+                    return this.request(method, endpoint, data, retryCount);
                 }
                 return { success: false, error: 'Auth failed', status: 401 };
             }
 
             if (response.status < 400) {
                 return response.data;
+            }
+
+            if (response.status >= 500 && retryCount < CONFIG.MAX_RETRIES) {
+                const delay = CONFIG.RETRY_DELAY * Math.pow(CONFIG.RETRY_BACKOFF, retryCount);
+                logger.warn(`Server error (${response.status}), retrying in ${delay}ms...`);
+                await sleep(delay);
+                return this.request(method, endpoint, data, retryCount + 1);
             }
 
             return {
@@ -374,7 +412,13 @@ class FINTOQClient {
             };
 
         } catch (e) {
-            return { success: false, error: e.message || 'Timeout' };
+            if (retryCount < CONFIG.MAX_RETRIES && (e.code === 'ECONNABORTED' || e.code === 'ECONNREFUSED')) {
+                const delay = CONFIG.RETRY_DELAY * Math.pow(CONFIG.RETRY_BACKOFF, retryCount);
+                logger.warn(`Connection error, retrying in ${delay}ms...`);
+                await sleep(delay);
+                return this.request(method, endpoint, data, retryCount + 1);
+            }
+            return { success: false, error: e.message || 'Request failed' };
         }
     }
 
@@ -392,11 +436,14 @@ class FINTOQClient {
 
             if (result.success && result.data?.token) {
                 this.account.token = result.data.token;
+                logger.account('✓ Authenticated', this.account.username);
                 return true;
             }
 
+            logger.error(`Auth failed: ${result.error}`);
             return false;
         } catch (e) {
+            logger.error(`Auth exception: ${e.message}`);
             return false;
         }
     }
@@ -424,7 +471,9 @@ class FINTOQClient {
         const result = await this.request('POST', '/bonus/daily/claim');
         if (result.success) {
             const data = result.data;
-            logger.reward(`Daily: +${data.amountFxp || 0} FXP`);
+            const reward = data.amountFxp || 0;
+            this.account.totalRewardsEarned += reward;
+            logger.reward(`Daily Bonus: +${reward} FXP`);
             return data;
         }
         return null;
@@ -440,7 +489,9 @@ class FINTOQClient {
         const result = await this.request('POST', `/quests/${questId}/claim`);
         if (result.success) {
             const data = result.data;
-            logger.reward(`Quest: +${data.rewardFxp || 0} FXP`);
+            const reward = data.rewardFxp || 0;
+            this.account.totalRewardsEarned += reward;
+            logger.reward(`Quest Claimed: +${reward} FXP`);
             return data;
         }
         return null;
@@ -469,7 +520,7 @@ class FINTOQClient {
             stakeFXP: stake,
         });
         if (result.success) {
-            logger.reward(`Prediction: ${stake} FXP on ${outcome}`);
+            logger.reward(`Prediction Stake: ${stake} FXP on ${outcome}`);
             return result.data;
         }
         return null;
@@ -493,7 +544,7 @@ class FINTOQClient {
         const result = await this.request('POST', '/nova/boost/activate');
         if (result.success) {
             const data = result.data;
-            logger.success(`Boost: ${data.multiplier || 1}x`);
+            logger.success(`✅ Boost Activated: ${data.multiplier || 1}x`);
             return data;
         } else if (result.data?.reason) {
             logger.skip(`Boost: ${BOOST_SKIP_REASONS[result.data.reason] || result.data.reason}`, this.account.username);
@@ -505,7 +556,9 @@ class FINTOQClient {
         const result = await this.request('POST', '/fxp/search/reward');
         if (result.success) {
             const data = result.data;
-            logger.reward(`Search: +${data.reward || 0} FXP`);
+            const reward = data.reward || 0;
+            this.account.totalRewardsEarned += reward;
+            logger.reward(`Search Reward: +${reward} FXP`);
             return data;
         }
         return null;
@@ -531,15 +584,22 @@ class FINTOQClient {
             const data = result.data;
             const reward = data.fxpReward || 0;
             this.account.dailyChatCount = data.dailyChatCount || this.account.dailyChatCount + 1;
+            this.account.totalRewardsEarned += reward;
 
             if (reward > 0) {
-                logger.account(`Nova ${this.account.dailyChatCount}/${this.account.dailyChatLimit} +${reward} FXP`, this.account.username);
+                logger.account(`Nova: ${this.account.dailyChatCount}/${this.account.dailyChatLimit} +${reward} FXP`, this.account.username);
             }
             return data;
         }
 
-        if (result.code === 'NOVA_LIMIT_REACHED' || (result.status === 429 && !result.code)) {
-            this.account.dailyChatCount = this.account.dailyChatLimit;
+        if (result.code === 'NOVA_LIMIT_REACHED') {
+            logger.warn(`🔄 Syncing chat state with API...`);
+            const freshStats = await this.request('GET', '/user/me');
+            if (freshStats && freshStats.success) {
+                this.account.dailyChatCount = freshStats.data.dailyChatCount || this.account.dailyChatLimit;
+                this.account.dailyChatLimit = freshStats.data.dailyChatLimit || 10;
+                logger.warn(`📊 Synced: ${this.account.dailyChatCount}/${this.account.dailyChatLimit}`);
+            }
             return 'LIMIT_REACHED';
         }
 
@@ -551,10 +611,20 @@ class BotTasks {
     constructor(client) {
         this.client = client;
         this.account = client.account;
+        this.taskStats = {
+            bonusClaimed: false,
+            searchClaimed: 0,
+            messagesSent: 0,
+            totalMessageReward: 0,
+            questsClaimed: 0,
+            totalQuestReward: 0,
+            predictionsPlaced: 0,
+            boostActivated: false,
+        };
     }
 
-    async randomDelay() {
-        const delay = getRandomDelay(CONFIG.MIN_ACTION_DELAY, CONFIG.MAX_ACTION_DELAY);
+    async randomDelay(min = CONFIG.MIN_ACTION_DELAY, max = CONFIG.MAX_ACTION_DELAY) {
+        const delay = getRandomDelay(min, max);
         await sleep(delay);
     }
 
@@ -562,40 +632,65 @@ class BotTasks {
         return list.filter(q => q.status !== 'REWARDED' && q.status !== 'CLAIMED');
     }
 
-    async runQuestGroup(quests, isSocial) {
+    completedQuests(list = []) {
+        return list.filter(q => q.status === 'COMPLETED');
+    }
+
+    sortQuestsByReward(quests) {
+        return [...quests].sort((a, b) => (b.rewardFxp || 0) - (a.rewardFxp || 0));
+    }
+
+    async runQuestGroup(quests, isSocial, groupName) {
         let acted = false;
-        for (const quest of quests) {
-            if (isSocial) {
-                if (quest.status === 'STARTED' || quest.status === 'ACTIVE') {
-                    const result = await this.client.verifySocialQuest(quest.key);
+        const sortedQuests = isSocial ? quests : this.sortQuestsByReward(quests);
+
+        for (const quest of sortedQuests) {
+            try {
+                if (isSocial) {
+                    if (quest.status === 'STARTED' || quest.status === 'ACTIVE') {
+                        const result = await this.client.verifySocialQuest(quest.key);
+                        if (result) {
+                            logger.account(`[${groupName}] Verified: ${quest.title}`, this.account.username);
+                            acted = true;
+                            await this.randomDelay();
+                        }
+                    } else if (quest.status === 'NOT_STARTED') {
+                        if (await this.client.startSocialQuest(quest.key)) {
+                            logger.account(`[${groupName}] Started: ${quest.title}`, this.account.username);
+                            acted = true;
+                            await this.randomDelay();
+                            const verifyResult = await this.client.verifySocialQuest(quest.key);
+                            if (verifyResult) {
+                                logger.account(`[${groupName}] Verified: ${quest.title}`, this.account.username);
+                                await this.randomDelay();
+                            }
+                        }
+                    }
+                } else if (quest.status === 'COMPLETED') {
+                    const result = await this.client.claimQuest(quest.id);
                     if (result) {
-                        logger.account(`Verified: ${quest.title}`, this.account.username);
+                        const reward = result.rewardFxp || 0;
+                        this.taskStats.questsClaimed++;
+                        this.taskStats.totalQuestReward += reward;
+                        logger.account(`[${groupName}] Claimed: ${quest.title} (+${reward})`, this.account.username);
                         acted = true;
                         await this.randomDelay();
                     }
-                } else if (quest.status === 'NOT_STARTED') {
-                    if (await this.client.startSocialQuest(quest.key)) {
-                        acted = true;
-                        await this.randomDelay();
-                        await this.client.verifySocialQuest(quest.key);
-                        await this.randomDelay();
-                    }
                 }
-            } else if (quest.status === 'COMPLETED') {
-                const result = await this.client.claimQuest(quest.id);
-                if (result) {
-                    logger.account(`Claimed: ${quest.title}`, this.account.username);
-                    acted = true;
-                    await this.randomDelay();
-                }
+            } catch (e) {
+                logger.warn(`Error processing quest ${quest.id}: ${e.message}`);
             }
         }
+
         return acted;
     }
 
     async executeAllTasks() {
         try {
+            logger.task('Starting task execution cycle', this.account.username);
+
             if (!await this.client.authenticate()) {
+                logger.error(`Authentication failed for ${this.account.username}`);
                 return false;
             }
             await this.randomDelay();
@@ -606,114 +701,164 @@ class BotTasks {
                 const level = stats.level || 0;
                 const chatCount = stats.dailyChatCount || 0;
                 const chatLimit = stats.dailyChatLimit || 10;
-                logger.account(`FXP: ${fxp} | Level: ${level} | Chat: ${chatCount}/${chatLimit}`, this.account.username);
+                logger.account(`📊 Initial - FXP: ${fxp} | Level: ${level} | Chat: ${chatCount}/${chatLimit}`, this.account.username);
             }
             await this.randomDelay();
 
-            const bonusStatus = await this.client.getDailyBonusStatus();
-            await this.randomDelay();
-
-            const quests = await this.client.getQuests();
-            const socialQuests = this.pendingQuests(quests.SOCIAL || []);
-            const dailyQuests = this.pendingQuests(quests.DAILY || []);
-            const growthQuests = this.pendingQuests(quests.GROWTH || []);
-            const hasPendingQuests = socialQuests.length + dailyQuests.length + growthQuests.length > 0;
-            await this.randomDelay();
-
-            const boostStatus = await this.client.getBoostStatus();
-            await this.randomDelay();
-
-            const chatLimitReached = this.account.dailyChatCount >= this.account.dailyChatLimit;
-            const bonusAlreadyClaimed = !!bonusStatus?.claimedToday;
-            const boostAvailable = !!boostStatus?.canActivate;
-
-            if (bonusAlreadyClaimed && chatLimitReached && !hasPendingQuests && !boostAvailable) {
-                logger.skip('All tasks already completed for today', this.account.username);
-                return true;
-            }
-
-            if (bonusAlreadyClaimed) {
-                logger.skip('Daily bonus already claimed', this.account.username);
-            } else {
-                await this.client.claimDailyBonus(bonusStatus);
+            if (CONFIG.DAILY_BONUS_PRIORITY) {
+                const bonusStatus = await this.client.getDailyBonusStatus();
                 await this.randomDelay();
+
+                if (bonusStatus && !bonusStatus.claimedToday) {
+                    await this.client.claimDailyBonus(bonusStatus);
+                    await this.randomDelay();
+                    this.taskStats.bonusClaimed = true;
+                } else if (bonusStatus?.claimedToday) {
+                    logger.task('Daily bonus already claimed today', this.account.username);
+                }
             }
 
-            await this.client.claimSearchReward();
-            await this.randomDelay();
+            for (let i = 0; i < 3; i++) {
+                const searchResult = await this.client.claimSearchReward();
+                if (searchResult) {
+                    this.taskStats.searchClaimed++;
+                    await this.randomDelay();
+                } else {
+                    break;
+                }
+            }
 
-            if (chatLimitReached) {
-                logger.skip(`Chat limit reached (${this.account.dailyChatCount}/${this.account.dailyChatLimit})`, this.account.username);
-            } else {
+            if (CONFIG.BOOST_BEFORE_MESSAGES) {
+                const boostStatus = await this.client.getBoostStatus();
+                await this.randomDelay();
+
+                if (boostStatus && boostStatus.canActivate) {
+                    await this.client.activateBoost(boostStatus);
+                    await this.randomDelay();
+                    this.taskStats.boostActivated = true;
+                }
+            }
+
+            let freshStats = await this.client.getUserStats();
+            const chatLimitReached = freshStats && freshStats.dailyChatCount >= freshStats.dailyChatLimit;
+
+            if (!chatLimitReached) {
                 const session = await this.client.getNovaSession();
                 const sessionId = session?._id || null;
                 await this.randomDelay();
 
                 const shuffledMessages = [...CHAT_MESSAGES].sort(() => Math.random() - 0.5);
-                let totalReward = 0;
-                let messagesSent = 0;
+                const messagesToSend = CONFIG.AGGRESSIVE_MODE 
+                    ? Math.min(CONFIG.NOVA_MESSAGES_TO_SEND, shuffledMessages.length, this.account.dailyChatLimit - this.account.dailyChatCount)
+                    : Math.min(Math.ceil(CONFIG.NOVA_MESSAGES_TO_SEND / 2), shuffledMessages.length, this.account.dailyChatLimit - this.account.dailyChatCount);
 
-                for (let i = 0; i < CONFIG.NOVA_MESSAGES_TO_SEND && i < shuffledMessages.length; i++) {
+                logger.task(`Preparing to send ${messagesToSend} Nova messages (${this.account.dailyChatCount}/${this.account.dailyChatLimit})`, this.account.username);
+
+                for (let i = 0; i < messagesToSend && i < shuffledMessages.length; i++) {
+                    if (this.account.dailyChatCount >= this.account.dailyChatLimit) {
+                        logger.task(`Chat limit reached (${this.account.dailyChatCount}/${this.account.dailyChatLimit})`, this.account.username);
+                        break;
+                    }
+
                     const msg = shuffledMessages[i];
                     const result = await this.client.sendNovaMessage(msg, sessionId);
 
                     if (result === 'LIMIT_REACHED') {
-                        logger.skip('Chat limit reached mid-session, stopping Nova', this.account.username);
+                        logger.warn(`⛔ Chat limit hit - stopping message loop`);
                         break;
                     }
+
                     if (result) {
-                        totalReward += result.fxpReward || 0;
-                        messagesSent++;
+                        this.taskStats.messagesSent++;
+                        this.taskStats.totalMessageReward += result.fxpReward || 0;
                     }
-                    await this.randomDelay();
+
+                    await this.randomDelay(CONFIG.MIN_MESSAGE_DELAY, CONFIG.MAX_MESSAGE_DELAY);
                 }
 
-                if (messagesSent > 0) {
-                    logger.account(`Nova: ${messagesSent} msgs, +${totalReward} FXP`, this.account.username);
+                if (this.taskStats.messagesSent > 0) {
+                    logger.account(`📝 Nova messages: ${this.taskStats.messagesSent} sent (+${this.taskStats.totalMessageReward} FXP)`, this.account.username);
                 }
+            } else {
+                logger.skip(`Chat limit already reached (${this.account.dailyChatCount}/${this.account.dailyChatLimit})`, this.account.username);
             }
+
             await this.randomDelay();
 
-            if (!hasPendingQuests) {
-                logger.skip('All quests already completed/claimed', this.account.username);
-            } else {
-                await this.runQuestGroup(socialQuests, true);
-                await this.runQuestGroup(dailyQuests, false);
-                await this.runQuestGroup(growthQuests, false);
+            const quests = await this.client.getQuests();
+            const socialQuests = this.pendingQuests(quests.SOCIAL || []);
+            const dailyQuests = this.completedQuests(quests.DAILY || []);
+            const growthQuests = this.completedQuests(quests.GROWTH || []);
+
+            logger.task(`Found ${socialQuests.length} social, ${dailyQuests.length} daily, ${growthQuests.length} growth quests to process`, this.account.username);
+            await this.randomDelay();
+
+            if (socialQuests.length > 0) {
+                await this.runQuestGroup(socialQuests, true, 'Social Quests');
+                await this.randomDelay();
             }
 
-            if (!boostAvailable) {
-                if (boostStatus?.reason) {
-                    logger.skip(`Boost: ${BOOST_SKIP_REASONS[boostStatus.reason] || boostStatus.reason}`, this.account.username);
-                }
-            } else {
-                await this.client.activateBoost(boostStatus);
+            if (dailyQuests.length > 0) {
+                await this.runQuestGroup(dailyQuests, false, 'Daily Quests');
+                await this.randomDelay();
+            }
+
+            if (growthQuests.length > 0) {
+                await this.runQuestGroup(growthQuests, false, 'Growth Quests');
                 await this.randomDelay();
             }
 
             const predictions = await this.client.getPredictions();
             const stakeable = predictions.filter(p => p.status === 'OPEN' && !p.userStake);
-            if (stakeable.length === 0) {
-                logger.skip('No stakeable predictions (none open or already staked)', this.account.username);
+
+            if (stakeable.length > 0) {
+                logger.task(`Found ${stakeable.length} open predictions to stake on`, this.account.username);
+
+                for (const pred of stakeable) {
+                    try {
+                        const maxStake = pred.maxStakeFXP || CONFIG.MAX_PREDICTION_STAKE;
+                        const stake = getRandomDelay(CONFIG.MIN_PREDICTION_STAKE, Math.min(maxStake, CONFIG.MAX_PREDICTION_STAKE));
+                        
+                        let outcome = 'YES';
+                        if (CONFIG.SMART_PREDICTION && pred.predictedOutcome) {
+                            outcome = pred.predictedOutcome === 'YES' ? 'YES' : 'NO';
+                        } else {
+                            outcome = Math.random() > 0.5 ? 'YES' : 'NO';
+                        }
+                        
+                        await this.client.placePredictionStake(pred.id, outcome, stake);
+                        this.taskStats.predictionsPlaced++;
+                        await this.randomDelay();
+                    } catch (e) {
+                        logger.warn(`Error placing prediction stake: ${e.message}`);
+                    }
+                }
             } else {
-                const pred = stakeable[Math.floor(Math.random() * stakeable.length)];
-                const maxStake = pred.maxStakeFXP || 10;
-                const stake = getRandomDelay(5, Math.min(maxStake, 20));
-                const outcome = Math.random() > 0.5 ? 'YES' : 'NO';
-                await this.client.placePredictionStake(pred.id, outcome, stake);
-                await this.randomDelay();
+                logger.task('No open predictions available', this.account.username);
             }
+
+            await this.randomDelay();
 
             const finalStats = await this.client.getUserStats();
             if (finalStats) {
                 const fxp = finalStats.fxpBalance || 0;
-                logger.account(`Final FXP: ${fxp}`, this.account.username);
+                const level = finalStats.level || 0;
+                logger.success(`✅ Account Complete: FXP ${fxp} | Level ${level} | Rewards Earned: ${this.account.totalRewardsEarned}`);
+                this.account.tasksCompleted = 6;
             }
 
-            logger.success(`Done: ${this.account.username}`);
+            logger.account(`📈 Session Summary:`, this.account.username);
+            logger.account(`   • Daily Bonus: ${this.taskStats.bonusClaimed ? '✓' : '✗'}`, this.account.username);
+            logger.account(`   • Search Rewards: ${this.taskStats.searchClaimed}x claimed`, this.account.username);
+            logger.account(`   • Messages Sent: ${this.taskStats.messagesSent} (+${this.taskStats.totalMessageReward} FXP)`, this.account.username);
+            logger.account(`   • Quests Claimed: ${this.taskStats.questsClaimed} (+${this.taskStats.totalQuestReward} FXP)`, this.account.username);
+            logger.account(`   • Predictions Placed: ${this.taskStats.predictionsPlaced}`, this.account.username);
+            logger.account(`   • Boost Activated: ${this.taskStats.boostActivated ? '✓' : '✗'}`, this.account.username);
+            logger.account(`   • 💎 Total Earned: ${this.account.totalRewardsEarned} FXP`, this.account.username);
+
             return true;
         } catch (e) {
-            logger.error(`Error: ${e.message}`);
+            logger.error(`Task execution error: ${e.message}`);
             return false;
         }
     }
@@ -735,8 +880,11 @@ class FINTOQBot {
         if (choice === '2') {
             this.useProxy = true;
             if (!fs.existsSync('proxy.txt')) {
-                fs.writeFileSync('proxy.txt', '# Add your proxies here\n# Format: http://user:pass@ip:port\n');
+                fs.writeFileSync('proxy.txt', '# Add your proxies here\n# Format: http://user:pass@ip:port or socks5://user:pass@ip:port\n');
             }
+            logger.info('Proxy mode enabled');
+        } else {
+            logger.info('Direct mode enabled');
         }
 
         this.isRunning = true;
@@ -747,17 +895,22 @@ class FINTOQBot {
                 if (this.lastRunDate !== currentDate) {
                     this.accountManager.resetAll();
                     this.lastRunDate = currentDate;
+                    logger.info('📅 Daily reset completed');
                 }
 
                 const account = this.accountManager.getNextAccount();
 
                 if (!account) {
+                    logger.success(`🎉 All ${this.accountManager.getTotalCount()} accounts completed!`);
+                    logger.info(`📊 Session Total Rewards: ${this.accountManager.getTotalRewards()} FXP`);
                     logger.info('💤 All done - sleeping until midnight');
+                    
                     const now = new Date();
                     const tomorrow = new Date(now);
                     tomorrow.setDate(tomorrow.getDate() + 1);
                     tomorrow.setHours(0, 0, 0, 0);
                     const sleepMs = tomorrow.getTime() - now.getTime();
+                    
                     await sleep(sleepMs);
                     continue;
                 }
@@ -771,7 +924,7 @@ class FINTOQBot {
 
                 const idx = this.accountManager.currentIndex + 1;
                 const total = this.accountManager.getTotalCount();
-                logger.account(`Processing ${idx}/${total}`, account.username);
+                logger.info(`\n🔄 Processing Account ${idx}/${total} - ${account.username}`);
 
                 const client = new FINTOQClient(account);
                 client.setUseProxy(this.useProxy);
@@ -782,10 +935,15 @@ class FINTOQBot {
                     this.accountManager.markDone(account);
                     const done = this.accountManager.getDoneCount();
                     const totalCount = this.accountManager.getTotalCount();
-                    logger.info(`📊 ${done}/${totalCount} completed`);
+                    const totalRewards = this.accountManager.getTotalRewards();
+                    logger.info(`✅ Progress: ${done}/${totalCount} | Session Rewards: ${totalRewards} FXP`);
+                } else {
+                    logger.warn(`Account ${account.username} task execution failed, marking as done to continue`);
+                    this.accountManager.markDone(account);
                 }
 
                 const delay = getRandomDelay(CONFIG.MIN_ACCOUNT_DELAY, CONFIG.MAX_ACCOUNT_DELAY);
+                logger.debug(`Waiting ${delay}ms before next account...`);
                 await sleep(delay);
 
             } catch (e) {
@@ -800,17 +958,20 @@ class FINTOQBot {
 
     stop() {
         this.isRunning = false;
+        logger.info('Bot stopped by user');
     }
 }
 
 const bot = new FINTOQBot();
 
 process.on('SIGINT', () => {
+    logger.warn('Received SIGINT, stopping bot...');
     bot.stop();
     process.exit(0);
 });
 
 process.on('SIGTERM', () => {
+    logger.warn('Received SIGTERM, stopping bot...');
     bot.stop();
     process.exit(0);
 });
